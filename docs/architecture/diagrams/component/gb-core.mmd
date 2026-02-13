@@ -1,0 +1,71 @@
+graph TB
+    subgraph Public_API[Public API]
+        GameBoy[GameBoy<br/>new / run_frame / step<br/>frame_buffer / audio_buffer<br/>set_button / serial_output]
+    end
+
+    subgraph CPU_Module[cpu/]
+        CPU[Cpu<br/>step / handle_interrupts<br/>fetch / execute]
+        Registers[Registers<br/>A F B C D E H L SP PC<br/>hl / de / bc / af accessors]
+        Opcodes[opcodes.rs<br/>execute: 256 match arms]
+        CBOpcodes[cb_opcodes.rs<br/>execute_cb: 256 match arms]
+    end
+
+    subgraph Bus_Module[bus.rs]
+        Bus[Bus<br/>read_byte / write_byte<br/>tick / init_post_boot]
+    end
+
+    subgraph PPU_Module[ppu/]
+        PPU[Ppu<br/>step / tick_one_dot<br/>render_scanline<br/>enter_mode / check_lyc]
+        OamEntry[OamEntry<br/>from_bytes / x_flip<br/>y_flip / priority / palette]
+    end
+
+    subgraph APU_Module[apu/]
+        APU[Apu<br/>step / tick_one / mix<br/>drain_samples]
+        Square[SquareChannel<br/>tick / tick_length<br/>tick_sweep / tick_envelope]
+        Wave[WaveChannel<br/>tick / tick_length]
+        Noise[NoiseChannel<br/>tick / tick_length<br/>tick_envelope]
+        FrameSeq[FrameSequencer<br/>tick: 512 Hz clock]
+    end
+
+    subgraph Cartridge_Module[cartridge/]
+        CartEnum[Cartridge enum<br/>read / write<br/>read_ram / write_ram]
+        NoMbc[NoMbc]
+        Mbc1[Mbc1<br/>bank switching]
+        Mbc2[Mbc2<br/>4-bit RAM]
+        Mbc3[Mbc3<br/>RTC support]
+        Mbc5[Mbc5<br/>9-bit bank]
+    end
+
+    subgraph Subsystem_Module[Subsystems]
+        Timer[Timer<br/>tick / tick_one<br/>falling edge detect]
+        IntCtrl[InterruptController<br/>request / acknowledge<br/>pending / any_pending]
+        Joypad[Joypad<br/>read / write<br/>set_button]
+        Serial[Serial<br/>tick / read / write<br/>drain_output]
+        DMA[Dma<br/>tick / write<br/>OAM byte transfer]
+    end
+
+    GameBoy --> CPU
+    GameBoy --> Bus
+    CPU -->|read/write via| Bus
+    Bus --> PPU
+    Bus --> APU
+    Bus --> CartEnum
+    Bus --> Timer
+    Bus --> IntCtrl
+    Bus --> Joypad
+    Bus --> Serial
+    Bus --> DMA
+
+    CPU --> Registers
+    CPU --> Opcodes
+    CPU --> CBOpcodes
+    PPU --> OamEntry
+    APU --> Square
+    APU --> Wave
+    APU --> Noise
+    APU --> FrameSeq
+    CartEnum --> NoMbc
+    CartEnum --> Mbc1
+    CartEnum --> Mbc2
+    CartEnum --> Mbc3
+    CartEnum --> Mbc5

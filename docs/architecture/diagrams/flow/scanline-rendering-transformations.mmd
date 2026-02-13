@@ -1,0 +1,64 @@
+flowchart TB
+    subgraph Input[Scanline Input]
+        LY[Current Line LY<br/>0-143]
+        LCDC[LCDC Register<br/>FF40 control bits]
+        Scroll[SCX SCY<br/>Background scroll]
+    end
+
+    subgraph TileFetch[Tile Data Fetch]
+        TileMap[Tile Map Lookup<br/>0x9800 or 0x9C00<br/>32x32 tile indices]
+        TileAddr{LCDC bit 4?}
+        Unsigned[Unsigned: 0x8000<br/>base + index x 16]
+        Signed[Signed: 0x9000<br/>base + i8 x 16]
+        TileRow[Read 2 bytes<br/>lo and hi per row]
+    end
+
+    subgraph PixelDecode[Pixel Decode]
+        ColorID[pixel_colour_id<br/>bit = 7 - pixel_x<br/>hi bit shl 1 OR lo bit]
+        RawStore[Store raw color ID<br/>bg_color_ids array<br/>for sprite priority]
+    end
+
+    subgraph PaletteMap[Palette Mapping]
+        BGPalette[apply_palette BGP<br/>palette shr color_id x 2 AND 0x03<br/>Maps 0-3 to shade 0-3]
+        FrameBuf[Write to frame_buf<br/>2-bit shade per pixel]
+    end
+
+    subgraph SpriteOverlay[Sprite Rendering]
+        OAMScan[Scan 40 OAM entries<br/>Find up to 10 on line]
+        SpriteSort[Sort by X position<br/>Lower X = higher priority]
+        SpriteDraw[For each sprite pixel:<br/>Decode tile data<br/>Check transparency<br/>Check BG priority]
+        PriorityCheck{BG-over-OBJ AND<br/>raw bg_color_id != 0?}
+        SpriteWrite[Write sprite shade<br/>to frame_buf]
+        Skip[Skip: BG wins]
+    end
+
+    subgraph FrontendRender[Frontend Color]
+        PaletteLUT[DMG Palette LUT<br/>0: 9BBC0F green<br/>1: 8BAC0F<br/>2: 306230<br/>3: 0F380F]
+        RGBA[Output 4-byte RGBA<br/>per pixel to GPU]
+    end
+
+    LY --> TileMap
+    LCDC --> TileAddr
+    Scroll --> TileMap
+    TileMap --> TileAddr
+    TileAddr -->|1| Unsigned
+    TileAddr -->|0| Signed
+    Unsigned --> TileRow
+    Signed --> TileRow
+    TileRow --> ColorID
+    ColorID --> RawStore
+    ColorID --> BGPalette
+    BGPalette --> FrameBuf
+    FrameBuf --> OAMScan
+    OAMScan --> SpriteSort
+    SpriteSort --> SpriteDraw
+    SpriteDraw --> PriorityCheck
+    PriorityCheck -->|Yes| Skip
+    PriorityCheck -->|No| SpriteWrite
+    SpriteWrite --> FrameBuf
+    FrameBuf --> PaletteLUT
+    PaletteLUT --> RGBA
+
+    style ColorID fill:#9f9,stroke:#333
+    style BGPalette fill:#ff9,stroke:#333
+    style PaletteLUT fill:#9ff,stroke:#333

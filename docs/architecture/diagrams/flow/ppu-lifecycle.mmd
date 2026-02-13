@@ -1,0 +1,38 @@
+stateDiagram-v2
+    [*] --> VBlank: Power on (ly=153)
+
+    OamScan --> Drawing: dot >= 80
+    Drawing --> HBlank: dot >= 252 (render scanline)
+    HBlank --> OamScan: dot >= 456 AND ly < 144
+    HBlank --> VBlank: dot >= 456 AND ly >= 144 (frame complete)
+    VBlank --> VBlank: dot >= 456 AND ly <= 153
+    VBlank --> OamScan: ly > 153 (new frame, ly=0)
+
+    state OamScan {
+        [*] --> ScanOAM
+        ScanOAM: Mode 2 (80 dots)
+        ScanOAM: OAM locked
+        ScanOAM: VRAM accessible
+    }
+
+    state Drawing {
+        [*] --> RenderPixels
+        RenderPixels: Mode 3 (172 dots)
+        RenderPixels: OAM + VRAM locked
+        RenderPixels: BG + Window + Sprites
+    }
+
+    state HBlank {
+        [*] --> Idle
+        Idle: Mode 0 (204 dots)
+        Idle: All memory accessible
+        Idle: ly increments at end
+    }
+
+    state VBlank {
+        [*] --> VBlankLines
+        VBlankLines: Mode 1 (10 scanlines)
+        VBlankLines: ly 144 to 153
+        VBlankLines: VBlank interrupt on entry
+        VBlankLines: All memory accessible
+    }

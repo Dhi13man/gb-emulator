@@ -1,0 +1,104 @@
+graph TB
+    subgraph External[External]
+        User((User))
+        ROM[Game ROM File<br/>.gb/.gbc]
+    end
+
+    subgraph Frontend[gb-frontend Binary]
+        Main[main.rs<br/>winit EventLoop]
+        Renderer[renderer.rs<br/>Color Mapping]
+        AudioPlayer[audio.rs<br/>Ring Buffer + cpal]
+        Input[input.rs<br/>Keyboard Mapping]
+    end
+
+    subgraph Core[gb-core Library no_std]
+        GameBoy[GameBoy<br/>Top-level API]
+
+        subgraph CPU_Sub[CPU]
+            CPU[Cpu<br/>SM83 Processor]
+            Regs[Registers<br/>A F B C D E H L SP PC]
+            Opcodes[opcodes.rs<br/>256 Standard]
+            CBOpcodes[cb_opcodes.rs<br/>256 CB-prefix]
+        end
+
+        subgraph Bus_Sub[Memory Bus]
+            Bus[Bus<br/>Address Decoder]
+        end
+
+        subgraph PPU_Sub[PPU]
+            PPU[Ppu<br/>Scanline Renderer]
+            OAM[OamEntry<br/>Sprite Attributes]
+        end
+
+        subgraph APU_Sub[APU]
+            APU[Apu<br/>Audio Mixer]
+            CH1[SquareChannel<br/>CH1 Sweep]
+            CH2[SquareChannel<br/>CH2]
+            CH3[WaveChannel<br/>CH3]
+            CH4[NoiseChannel<br/>CH4 LFSR]
+            FrameSeq[FrameSequencer<br/>512 Hz]
+        end
+
+        subgraph Cartridge_Sub[Cartridge]
+            Cart[Cartridge<br/>Enum Dispatch]
+            NoMBC[NoMbc]
+            MBC1[Mbc1]
+            MBC2[Mbc2]
+            MBC3[Mbc3]
+            MBC5[Mbc5]
+        end
+
+        subgraph Subsystems[Subsystems]
+            Timer[Timer<br/>DIV TIMA TMA TAC]
+            Interrupts[InterruptController<br/>IE IF IME]
+            Joypad[Joypad<br/>Button State]
+            Serial[Serial<br/>Link Port]
+            DMA[Dma<br/>OAM Transfer]
+        end
+    end
+
+    User -->|Keyboard| Main
+    ROM -->|Load| Main
+    Main -->|run_frame| GameBoy
+    Main -->|frame_buffer| Renderer
+    Main -->|audio_buffer| AudioPlayer
+    Main -->|set_button| Input
+
+    Input -->|Button| Joypad
+
+    GameBoy -->|step| CPU
+    CPU -->|read/write| Bus
+    GameBoy -->|tick| Bus
+
+    Bus -->|0x0000-0x7FFF| Cart
+    Bus -->|0x8000-0x9FFF| PPU
+    Bus -->|0xFF10-0xFF3F| APU
+    Bus -->|0xFF04-0xFF07| Timer
+    Bus -->|0xFF0F 0xFFFF| Interrupts
+    Bus -->|0xFF00| Joypad
+    Bus -->|0xFF01-0xFF02| Serial
+    Bus -->|0xFF46| DMA
+
+    Cart --- NoMBC
+    Cart --- MBC1
+    Cart --- MBC2
+    Cart --- MBC3
+    Cart --- MBC5
+
+    APU --- CH1
+    APU --- CH2
+    APU --- CH3
+    APU --- CH4
+    APU --- FrameSeq
+
+    CPU --- Regs
+    CPU --- Opcodes
+    CPU --- CBOpcodes
+
+    PPU --- OAM
+    DMA -.->|dma_write_oam| PPU
+
+    Timer -.->|interrupt| Interrupts
+    PPU -.->|VBlank/STAT| Interrupts
+    Serial -.->|interrupt| Interrupts
+    Joypad -.->|interrupt| Interrupts

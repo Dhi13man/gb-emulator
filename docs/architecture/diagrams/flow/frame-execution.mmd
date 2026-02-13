@@ -1,0 +1,72 @@
+sequenceDiagram
+    autonumber
+    participant Main as main.rs<br/>EventLoop
+    participant GB as GameBoy
+    participant CPU as Cpu
+    participant Bus as Bus
+    participant PPU as Ppu
+    participant APU as Apu
+    participant Timer as Timer
+    participant IRQ as InterruptController
+    participant Renderer as renderer.rs
+    participant Audio as AudioPlayer
+
+    Main->>GB: run_frame()
+    activate GB
+
+    loop Until ppu.frame_complete
+        GB->>CPU: step(bus)
+        activate CPU
+
+        CPU->>IRQ: handle_interrupts()
+        alt IME && pending
+            IRQ-->>CPU: vector address (20 T-cycles)
+        else HALT state
+            CPU-->>GB: 4 T-cycles (idle)
+        else Normal execution
+            CPU->>Bus: fetch opcode (read_byte)
+            Bus-->>CPU: opcode byte
+            CPU->>CPU: execute(opcode)
+            Note over CPU: 4-20 T-cycles per instruction
+        end
+        deactivate CPU
+
+        GB->>Bus: tick(cycles)
+        activate Bus
+
+        Bus->>Timer: tick(cycles)
+        alt TIMA overflow
+            Timer-->>IRQ: request(Timer)
+        end
+
+        Bus->>PPU: step(cycles)
+        Note over PPU: tick_one_dot x cycles
+        alt Mode transition to VBlank
+            PPU-->>IRQ: request(VBlank)
+            Note over PPU: frame_complete = true
+        end
+        alt STAT condition rising edge
+            PPU-->>IRQ: request(LcdStat)
+        end
+
+        Bus->>APU: step(cycles)
+        Note over APU: tick channels + downsample
+
+        deactivate Bus
+    end
+
+    GB-->>Main: frame_cycles
+    deactivate GB
+
+    Main->>GB: frame_buffer()
+    GB-->>Renderer: 160x144 2-bit buffer
+    Renderer->>Renderer: Map to RGBA via DMG palette
+    Renderer-->>Main: RGBA pixel data
+
+    Main->>GB: audio_buffer()
+    GB-->>Main: Vec of (f32, f32) stereo samples
+    Main->>Audio: push_samples()
+    Audio->>Audio: Queue in ring buffer
+
+    Main->>Main: pixels.render() (GPU present)
+    Main->>Main: about_to_wait() sleep to 59.73 Hz

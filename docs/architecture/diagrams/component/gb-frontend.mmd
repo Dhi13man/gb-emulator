@@ -1,0 +1,45 @@
+graph TB
+    subgraph EventLoop[winit Event Loop]
+        App[App struct<br/>ApplicationHandler]
+        Resumed[resumed<br/>Init window + emulator]
+        WindowEvent[window_event<br/>Input + Redraw]
+        AboutToWait[about_to_wait<br/>Frame pacing 59.73 Hz]
+    end
+
+    subgraph Rendering[Rendering Pipeline]
+        PixelsSurface[pixels::Pixels<br/>wgpu Backend]
+        RendererMod[renderer::render<br/>2-bit to RGBA]
+        DMGPalette[DMG Palette<br/>4 green shades]
+    end
+
+    subgraph Audio[Audio Pipeline]
+        AudioPlayer[AudioPlayer<br/>cpal Stream]
+        RingBuffer[RingBuffer<br/>4096 stereo samples]
+        DeviceCallback[Device Callback<br/>f32/i16/u16 output]
+    end
+
+    subgraph InputMapping[Input]
+        InputMod[input module<br/>KeyCode to Button]
+    end
+
+    subgraph EmulatorCore[gb-core]
+        GameBoy[GameBoy API]
+    end
+
+    App --> Resumed
+    App --> WindowEvent
+    App --> AboutToWait
+
+    WindowEvent -->|KeyboardInput| InputMod
+    InputMod -->|set_button| GameBoy
+
+    WindowEvent -->|RedrawRequested| GameBoy
+    GameBoy -->|frame_buffer| RendererMod
+    RendererMod --> DMGPalette
+    RendererMod -->|RGBA pixels| PixelsSurface
+
+    GameBoy -->|audio_buffer| AudioPlayer
+    AudioPlayer --> RingBuffer
+    RingBuffer --> DeviceCallback
+
+    AboutToWait -->|sleep until 16.74ms| WindowEvent

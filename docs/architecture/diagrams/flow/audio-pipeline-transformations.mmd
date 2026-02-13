@@ -1,0 +1,74 @@
+flowchart TB
+    subgraph Channels[Channel Digital Output 0-15]
+        CH1[CH1: Square+Sweep<br/>duty cycle output 0-15]
+        CH2[CH2: Square<br/>duty cycle output 0-15]
+        CH3[CH3: Wave<br/>wave RAM sample 0-15]
+        CH4[CH4: Noise<br/>LFSR output 0-15]
+    end
+
+    subgraph DAC[DAC Conversion]
+        DAC1{DAC enabled?}
+        DACCalc[Formula:<br/>sample / 7.5 - 1.0<br/>Maps 0 to -1.0<br/>Maps 15 to +1.0]
+        DACOff[Output: 0.0<br/>disconnected]
+    end
+
+    subgraph Panning[NR51 Stereo Panning]
+        PanL[Left Mix<br/>Sum enabled channels]
+        PanR[Right Mix<br/>Sum enabled channels]
+    end
+
+    subgraph Volume[NR50 Master Volume]
+        VolL[Left Volume<br/>left x vol_L + 1<br/>vol_L = bits 6-4]
+        VolR[Right Volume<br/>right x vol_R + 1<br/>vol_R = bits 2-0]
+    end
+
+    subgraph Normalize[Normalization]
+        Norm[Divide by 32<br/>max = 1.0 x 4ch x 8vol]
+    end
+
+    subgraph HPF[High-Pass Filter]
+        HPFCalc[Capacitor coupling<br/>cutoff ~20 Hz<br/>Removes DC offset]
+    end
+
+    subgraph Clamp[Output Clamp]
+        ClampCalc[clamp -1.0 to +1.0]
+    end
+
+    subgraph Frontend[Frontend Conversion]
+        RingBuf[Ring Buffer<br/>4096 stereo samples]
+        DevFmt{Device Format?}
+        F32Out[f32: passthrough]
+        I16Out[i16: sample x 32767]
+        U16Out[u16: sample+1 x 0.5 x 65535]
+        Speaker[Audio Device Output]
+    end
+
+    CH1 --> DAC1
+    CH2 --> DAC1
+    CH3 --> DAC1
+    CH4 --> DAC1
+    DAC1 -->|Yes| DACCalc
+    DAC1 -->|No| DACOff
+    DACCalc --> PanL
+    DACCalc --> PanR
+    DACOff --> PanL
+    DACOff --> PanR
+    PanL --> VolL
+    PanR --> VolR
+    VolL --> Norm
+    VolR --> Norm
+    Norm --> HPFCalc
+    HPFCalc --> ClampCalc
+    ClampCalc --> RingBuf
+    RingBuf --> DevFmt
+    DevFmt -->|F32| F32Out
+    DevFmt -->|I16| I16Out
+    DevFmt -->|U16| U16Out
+    F32Out --> Speaker
+    I16Out --> Speaker
+    U16Out --> Speaker
+
+    style DACCalc fill:#9f9,stroke:#333
+    style VolL fill:#ff9,stroke:#333
+    style VolR fill:#ff9,stroke:#333
+    style HPFCalc fill:#9ff,stroke:#333
