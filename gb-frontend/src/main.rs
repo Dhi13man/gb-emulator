@@ -28,10 +28,13 @@ struct App {
     pixels: Option<Pixels<'static>>,
     audio: Option<audio::AudioPlayer>,
     last_frame: Instant,
+    frame_count: u32,
+    screenshot_dir: Option<String>,
 }
 
 impl App {
     fn new(rom_path: String) -> Self {
+        let screenshot_dir = env::var("GB_SCREENSHOT").ok();
         Self {
             rom_path,
             gb: None,
@@ -39,6 +42,21 @@ impl App {
             pixels: None,
             audio: None,
             last_frame: Instant::now(),
+            frame_count: 0,
+            screenshot_dir,
+        }
+    }
+
+    fn save_screenshot(&self, frame: &[u8]) {
+        if let Some(dir) = &self.screenshot_dir {
+            let path = format!("{}/frame_{:04}.ppm", dir, self.frame_count);
+            let mut data = format!("P6\n{} {}\n255\n", WIDTH, HEIGHT).into_bytes();
+            for pixel in frame.chunks_exact(4) {
+                data.push(pixel[0]);
+                data.push(pixel[1]);
+                data.push(pixel[2]);
+            }
+            let _ = fs::write(&path, &data);
         }
     }
 }
@@ -66,10 +84,13 @@ impl ApplicationHandler for App {
 
         // Load ROM
         let rom = fs::read(&self.rom_path).expect("Failed to read ROM file");
-        let gb = GameBoy::new(rom);
+        let mut gb = GameBoy::new(rom);
 
-        // Create audio player
+        // Create audio player and sync sample rate with APU
         let audio_player = audio::AudioPlayer::new();
+        if let Ok(ref player) = audio_player {
+            gb.set_sample_rate(player.sample_rate());
+        }
 
         self.window = Some(window);
         self.pixels = Some(pixels);
@@ -108,16 +129,52 @@ impl ApplicationHandler for App {
 
             WindowEvent::RedrawRequested => {
                 if let (Some(gb), Some(pixels)) = (&mut self.gb, &mut self.pixels) {
+                    // Log only LY=0 for every frame to see register transitions
+                    let fc = self.frame_count;
+                    // Enable debug for narrow window - just LY=0 summary per frame
+                    gb.set_ppu_debug(fc >= 280 && fc <= 550);
+
                     // Run one frame
                     gb.run_frame();
 
                     // Render frame buffer to pixels
                     renderer::render(gb.frame_buffer(), pixels.frame_mut());
 
+                    self.frame_count += 1;
+
+                    // Auto-screenshot at key frames
+                    if let Some(dir) = &self.screenshot_dir {
+                        let fc = self.frame_count;
+                        if fc % 60 == 0 && fc <= 720 {
+                            let path = format!("{}/frame_{:04}.ppm", dir, fc);
+                            let frame = pixels.frame_mut();
+                            let mut data = format!("P6\n{} {}\n255\n", WIDTH, HEIGHT).into_bytes();
+                            for pixel in frame.chunks_exact(4) {
+                                data.push(pixel[0]);
+                                data.push(pixel[1]);
+                                data.push(pixel[2]);
+                            }
+                            let _ = fs::write(&path, &data);
+                        }
+                    }
+
                     // Submit audio samples
                     if let Some(audio) = &mut self.audio {
                         let samples = gb.audio_buffer();
                         audio.push_samples(&samples);
+                    }
+
+                    // Capture serial output (for test ROMs)
+                    let serial_bytes = gb.serial_output();
+                    for &b in &serial_bytes {
+                        eprint!("{}", b as char);
+                    }
+
+                    // Print PPU debug info
+                    if let Some(debug) = gb.drain_ppu_debug() {
+                        if !debug.is_empty() {
+                            eprint!("{}", debug);
+                        }
                     }
 
                     // Present

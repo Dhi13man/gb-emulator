@@ -1,3 +1,7 @@
 target/
 *.sav
+*.gbc
+*.gb
+*.rom
 .DS_Store
+trace.log

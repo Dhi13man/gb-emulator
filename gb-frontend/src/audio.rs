@@ -46,6 +46,7 @@ impl RingBuffer {
 pub struct AudioPlayer {
     _stream: Stream,
     ring_buffer: Arc<Mutex<RingBuffer>>,
+    sample_rate: u32,
 }
 
 impl AudioPlayer {
@@ -56,6 +57,7 @@ impl AudioPlayer {
 
         let config = device.default_output_config()?;
         let sample_format = config.sample_format();
+        let device_sample_rate = config.sample_rate().0;
         let config = config.into();
 
         let ring_buffer = Arc::new(Mutex::new(RingBuffer::new(BUFFER_SIZE)));
@@ -109,7 +111,12 @@ impl AudioPlayer {
         Ok(Self {
             _stream: stream,
             ring_buffer,
+            sample_rate: device_sample_rate,
         })
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
     }
 
     pub fn push_samples(&self, samples: &[(f32, f32)]) {

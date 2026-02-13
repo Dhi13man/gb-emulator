@@ -32,18 +32,14 @@ impl Joypad {
     }
 
     pub fn read(&self) -> u8 {
-        let mut result = self.select | 0xC0;
-
+        let mut lower = 0x0F; // all buttons released
         if self.select & 0x10 == 0 {
-            // Direction keys selected
-            result = (result & 0xF0) | self.directions;
+            lower &= self.directions;
         }
         if self.select & 0x20 == 0 {
-            // Action buttons selected
-            result = (result & 0xF0) | (result & 0x0F) & self.actions;
+            lower &= self.actions;
         }
-
-        result
+        self.select | 0xC0 | lower
     }
 
     pub fn write(&mut self, value: u8) {

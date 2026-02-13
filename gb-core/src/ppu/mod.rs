@@ -63,6 +63,8 @@ pub struct Ppu {
     oam: [u8; 0xA0],
     // Frame buffer: each entry is a 2-bit colour index (0-3).
     frame_buf: [[u8; SCREEN_WIDTH]; SCREEN_HEIGHT],
+    // Per-scanline raw BG colour IDs (before palette mapping) for sprite priority.
+    bg_color_ids: [u8; SCREEN_WIDTH],
 
     // ---- LCD registers ----
     lcdc: u8,  // FF40 – LCD Control
@@ -92,6 +94,16 @@ pub struct Ppu {
     // ---- Interrupt outputs (active for one `step` call, then cleared by bus) ----
     pub stat_interrupt: bool,
     pub vblank_interrupt: bool,
+
+    /// Set when the PPU enters VBlank — indicates the frame buffer is complete.
+    pub frame_complete: bool,
+
+    /// Frame counter for debug logging.
+    pub frame_number: u32,
+    /// Debug: log PPU state per scanline for a specific frame range.
+    pub debug_log: bool,
+    /// Debug output buffer.
+    pub debug_buffer: Option<alloc::string::String>,
 }
 
 impl Ppu {
@@ -101,12 +113,13 @@ impl Ppu {
             vram: [0; 0x2000],
             oam: [0; 0xA0],
             frame_buf: [[0u8; SCREEN_WIDTH]; SCREEN_HEIGHT],
+            bg_color_ids: [0u8; SCREEN_WIDTH],
 
             lcdc: 0x91,  // BG on, OBJ on, LCD on
-            stat: 0x85,  // Mode 1 (VBlank), LYC=LY match at boot
+            stat: 0x01,  // Mode 1 (VBlank), no LYC match (LY=153, LYC=0)
             scy: 0x00,
             scx: 0x00,
-            ly: 0x00,    // Post-boot: scanline 0 (some docs say 0x91 for STAT implies 144+)
+            ly: 153,     // Last VBlank line — wraps to frame start on next scanline
             lyc: 0x00,
             bgp: 0xFC,   // 11 11 11 00 – colour 0 = lightest
             obp0: 0x00,
@@ -114,7 +127,7 @@ impl Ppu {
             wy: 0x00,
             wx: 0x00,
 
-            mode: PpuMode::OamScan,
+            mode: PpuMode::VBlank,
             dot: 0,
             window_line: 0,
             window_triggered: false,
@@ -123,6 +136,11 @@ impl Ppu {
 
             stat_interrupt: false,
             vblank_interrupt: false,
+            frame_complete: false,
+
+            frame_number: 0,
+            debug_log: false,
+            debug_buffer: None,
         }
     }
 
@@ -180,6 +198,8 @@ impl Ppu {
                     if self.ly >= 144 {
                         self.enter_mode(PpuMode::VBlank);
                         self.vblank_interrupt = true;
+                        self.frame_complete = true;
+                        self.frame_number += 1;
                     } else {
                         self.enter_mode(PpuMode::OamScan);
                     }
@@ -259,6 +279,30 @@ impl Ppu {
             return;
         }
 
+        if self.debug_log {
+            if let Some(buf) = &mut self.debug_buffer {
+                // Only log a few key scanlines to avoid floods
+                if self.ly == 0 || self.ly == 72 || self.ly == 143 {
+                    use core::fmt::Write;
+                    // Read tile map preview before borrowing buf mutably
+                    let m: [u8; 8] = core::array::from_fn(|i| self.vram[(0x9800 - 0x8000 + i) as usize]);
+                    let ly = self.ly;
+                    let lcdc = self.lcdc;
+                    let scx = self.scx;
+                    let scy = self.scy;
+                    let wy = self.wy;
+                    let bgp = self.bgp;
+                    let fn_ = self.frame_number;
+                    let _ = write!(
+                        buf,
+                        "F{} LY={:3} LCDC={:02X} SCX={:3} SCY={:3} WY={:3} BGP={:02X} MAP={:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}\n",
+                        fn_, ly, lcdc, scx, scy, wy, bgp,
+                        m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
+                    );
+                }
+            }
+        }
+
         // Background / Window enable (DMG: bit 0 = BG/WIN master enable).
         if self.lcdc & LCDC_BG_WIN_ENABLE != 0 {
             self.render_bg_scanline();
@@ -273,6 +317,7 @@ impl Ppu {
             let line = self.ly as usize;
             for px in 0..SCREEN_WIDTH {
                 self.frame_buf[line][px] = 0;
+                self.bg_color_ids[px] = 0;
             }
         }
 
@@ -317,6 +362,7 @@ impl Ppu {
             let hi = self.vram_read_internal(tile_data_addr + 1);
 
             let colour_id = pixel_colour_id(lo, hi, pixel_x);
+            self.bg_color_ids[px] = colour_id;
             self.frame_buf[line][px] = apply_palette(self.bgp, colour_id);
         }
     }
@@ -363,6 +409,7 @@ impl Ppu {
             let hi = self.vram_read_internal(tile_data_addr + 1);
 
             let colour_id = pixel_colour_id(lo, hi, pixel_x);
+            self.bg_color_ids[px] = colour_id;
             self.frame_buf[line][px] = apply_palette(self.bgp, colour_id);
         }
 
@@ -456,15 +503,9 @@ impl Ppu {
                 // BG-over-OBJ: if the priority bit is set, the sprite is
                 // hidden behind BG colours 1-3.
                 if entry.priority() {
-                    // Read the BG colour index already in the frame buffer.
-                    // If it is non-zero the sprite pixel is hidden.
-                    let bg_colour = self.frame_buf[line][screen_x as usize];
-                    // We need the raw colour id, not the palette-mapped shade.
-                    // Since we already wrote the palette-mapped value, we
-                    // check if it is not the shade for BG colour 0.
-                    // Shade for BG colour 0 = bgp & 0x03.
-                    let bg_colour_0_shade = self.bgp & 0x03;
-                    if bg_colour != bg_colour_0_shade {
+                    // Check the raw BG colour ID (before palette mapping).
+                    // If it is non-zero (colours 1-3), the sprite pixel is hidden.
+                    if self.bg_color_ids[screen_x as usize] != 0 {
                         continue;
                     }
                 }

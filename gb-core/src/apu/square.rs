@@ -48,7 +48,7 @@ pub struct SquareChannel {
     timer: u16,
 
     // DAC
-    dac_enabled: bool,
+    pub(crate) dac_enabled: bool,
 }
 
 impl SquareChannel {

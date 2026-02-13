@@ -18,6 +18,10 @@ pub struct Cpu {
     /// HALT bug: if HALT executed with IME=0 and (IE & IF) != 0,
     /// the next instruction's first byte is read twice (PC not incremented).
     halt_bug: bool,
+    /// Debug: count consecutive halted steps to detect hangs.
+    halt_cycles: u32,
+    /// Debug: total steps executed.
+    step_count: u64,
 }
 
 impl Cpu {
@@ -26,12 +30,17 @@ impl Cpu {
             regs: Registers::new(),
             state: CpuState::Running,
             halt_bug: false,
+            halt_cycles: 0,
+            step_count: 0,
         }
     }
 
     /// Execute one instruction and return the T-cycle cost.
     pub fn step(&mut self, bus: &mut Bus) -> u32 {
-        // Handle EI delay: enable IME after executing the instruction following EI
+        self.step_count += 1;
+
+        // Handle EI delay: save and clear the pending flag so we can detect
+        // if DI cancels it during the instruction.
         let was_ei_pending = bus.interrupts.ei_pending;
         if was_ei_pending {
             bus.interrupts.ei_pending = false;
@@ -40,13 +49,16 @@ impl Cpu {
         // Check for pending interrupts
         let interrupt_cycles = self.handle_interrupts(bus);
         if interrupt_cycles > 0 {
+            self.halt_cycles = 0;
             return interrupt_cycles;
         }
 
         // If halted, consume 4 T-cycles (1 M-cycle) doing nothing
         if self.state == CpuState::Halted {
+            self.halt_cycles += 4;
             return 4;
         }
+        self.halt_cycles = 0;
 
         // Fetch opcode
         let opcode = self.fetch_byte(bus);
@@ -65,9 +77,21 @@ impl Cpu {
             self.execute(bus, opcode)
         };
 
-        // If EI was pending, enable IME now (after the instruction following EI)
-        if was_ei_pending {
-            bus.interrupts.ime = true;
+        // Apply EI delay: enable IME after the instruction following EI,
+        // but only if DI didn't cancel it (DI clears ei_pending which we
+        // already saved, but also re-clears it to signal cancellation).
+        // If the executed instruction was DI, ei_pending stays false (DI
+        // explicitly clears it). If it was anything else, ei_pending is
+        // false because we cleared it above. We detect DI cancellation by
+        // checking if IME was explicitly set to false during this step.
+        if was_ei_pending && !bus.interrupts.ei_pending {
+            // ei_pending is false either because we cleared it (normal) or
+            // because DI cleared it (cancel). Distinguish by checking: DI
+            // sets IME=false. If IME is already false and the instruction
+            // was DI (opcode 0xF3), we should NOT re-enable.
+            if opcode != 0xF3 {
+                bus.interrupts.ime = true;
+            }
         }
 
         cycles
@@ -83,6 +107,11 @@ impl Cpu {
 
         // Try to dispatch interrupt
         if let Some(vector) = bus.interrupts.acknowledge() {
+            // Clear halt_bug if set — interrupt dispatch takes priority
+            // (e.g. EI + HALT with pending interrupt: halt_bug was set but
+            // the interrupt dispatches before the next fetch can consume it)
+            self.halt_bug = false;
+
             // Push PC onto stack (2 M-cycles)
             self.regs.sp = self.regs.sp.wrapping_sub(1);
             bus.write_byte(self.regs.sp, (self.regs.pc >> 8) as u8);

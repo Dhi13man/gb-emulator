@@ -1,3 +1,5 @@
+extern crate alloc;
+
 /// Serial transfer stub (FF01-FF02).
 /// Minimal implementation to prevent games from hanging.
 pub struct Serial {
@@ -8,6 +10,8 @@ pub struct Serial {
     /// Transfer cycles remaining
     transfer_cycles: u32,
     pub interrupt_pending: bool,
+    /// Captured serial output bytes (for test ROM debugging).
+    output: alloc::vec::Vec<u8>,
 }
 
 impl Serial {
@@ -17,6 +21,7 @@ impl Serial {
             control: 0x7E,
             transfer_cycles: 0,
             interrupt_pending: false,
+            output: alloc::vec::Vec::new(),
         }
     }
 
@@ -43,6 +48,11 @@ impl Serial {
         }
     }
 
+    /// Drain captured serial output bytes.
+    pub fn drain_output(&mut self) -> alloc::vec::Vec<u8> {
+        core::mem::take(&mut self.output)
+    }
+
     pub fn tick(&mut self, cycles: u32) {
         if self.transfer_cycles == 0 {
             return;
@@ -51,7 +61,9 @@ impl Serial {
         self.transfer_cycles = self.transfer_cycles.saturating_sub(cycles);
 
         if self.transfer_cycles == 0 {
-            // Transfer complete: no cable connected, received 0xFF
+            // Transfer complete: capture the sent byte before replacing
+            self.output.push(self.data);
+            // No cable connected, received 0xFF
             self.data = 0xFF;
             self.control &= !0x80; // Clear transfer start flag
             self.interrupt_pending = true;

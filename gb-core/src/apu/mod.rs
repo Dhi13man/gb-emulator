@@ -33,9 +33,33 @@ use noise::NoiseChannel;
 use frame_seq::FrameSequencer;
 
 const CPU_CLOCK: u32 = 4_194_304;
-const SAMPLE_RATE: u32 = 44_100;
-/// Number of T-cycles between output samples (CPU_CLOCK / SAMPLE_RATE ≈ 95)
-const DOWNSAMPLE_PERIOD: u32 = CPU_CLOCK / SAMPLE_RATE;
+const DEFAULT_SAMPLE_RATE: u32 = 44_100;
+
+/// Simple first-order high-pass filter that emulates the Game Boy's
+/// capacitor coupling, removing DC offset from the audio signal.
+struct HighPassFilter {
+    capacitor: f32,
+    factor: f32,
+}
+
+impl HighPassFilter {
+    fn new(sample_rate: u32) -> Self {
+        // Cutoff frequency ~20 Hz, matching Game Boy hardware coupling capacitor.
+        // factor = 1 - (2*pi*cutoff / sample_rate), clamped for stability.
+        let cutoff = 20.0_f32;
+        let factor = 1.0 - (2.0 * core::f32::consts::PI * cutoff / sample_rate as f32);
+        Self {
+            capacitor: 0.0,
+            factor: factor.clamp(0.9, 0.9999),
+        }
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        let output = input - self.capacitor;
+        self.capacitor = input - output * self.factor;
+        output
+    }
+}
 
 pub struct Apu {
     ch1: SquareChannel,
@@ -68,10 +92,21 @@ pub struct Apu {
 
     /// Counter for downsampling from CPU clock to audio sample rate
     sample_clock: u32,
+
+    /// T-cycles between output samples (CPU_CLOCK / sample_rate)
+    downsample_period: u32,
+
+    /// High-pass filters for left and right channels (emulates hardware capacitor coupling)
+    hpf_left: HighPassFilter,
+    hpf_right: HighPassFilter,
 }
 
 impl Apu {
     pub fn new() -> Self {
+        Self::with_sample_rate(DEFAULT_SAMPLE_RATE)
+    }
+
+    pub fn with_sample_rate(sample_rate: u32) -> Self {
         Self {
             ch1: SquareChannel::new(true),  // CH1 has sweep
             ch2: SquareChannel::new(false), // CH2 has no sweep
@@ -83,6 +118,9 @@ impl Apu {
             nr52: 0xF1,
             sample_buffer: Vec::new(),
             sample_clock: 0,
+            downsample_period: CPU_CLOCK / sample_rate,
+            hpf_left: HighPassFilter::new(sample_rate),
+            hpf_right: HighPassFilter::new(sample_rate),
         }
     }
 
@@ -126,63 +164,67 @@ impl Apu {
 
         // Downsample: collect a stereo sample at the target sample rate
         self.sample_clock += 1;
-        if self.sample_clock >= DOWNSAMPLE_PERIOD {
-            self.sample_clock -= DOWNSAMPLE_PERIOD;
+        if self.sample_clock >= self.downsample_period {
+            self.sample_clock -= self.downsample_period;
             let (left, right) = self.mix();
             self.sample_buffer.push((left, right));
         }
     }
 
     /// Mix all four channels into a stereo (left, right) sample pair.
-    /// Applies NR51 panning and NR50 master volume.
+    /// Applies DAC centering, NR51 panning, NR50 master volume, and high-pass filtering.
     /// Returns normalized f32 values in approximately [-1.0, 1.0].
-    fn mix(&self) -> (f32, f32) {
+    fn mix(&mut self) -> (f32, f32) {
         if self.nr52 & 0x80 == 0 {
             return (0.0, 0.0);
         }
 
-        let ch1_sample = self.ch1.sample() as f32;
-        let ch2_sample = self.ch2.sample() as f32;
-        let ch3_sample = self.ch3.sample() as f32;
-        let ch4_sample = self.ch4.sample() as f32;
+        // Convert each channel's digital output (0-15) to centered DAC output.
+        // When DAC is enabled: maps 0→-1.0, 7.5→0.0, 15→+1.0
+        // When DAC is disabled: output is 0.0 (disconnected from mixer)
+        #[inline]
+        fn dac_output(sample: u8, dac_enabled: bool) -> f32 {
+            if !dac_enabled {
+                return 0.0;
+            }
+            (sample as f32 / 7.5) - 1.0
+        }
+
+        let ch1 = dac_output(self.ch1.sample(), self.ch1.dac_enabled);
+        let ch2 = dac_output(self.ch2.sample(), self.ch2.dac_enabled);
+        let ch3 = dac_output(self.ch3.sample(), self.ch3.dac_enabled);
+        let ch4 = dac_output(self.ch4.sample(), self.ch4.dac_enabled);
 
         // Apply NR51 panning
         let mut left: f32 = 0.0;
         let mut right: f32 = 0.0;
 
-        if self.nr51 & 0x10 != 0 { left += ch1_sample; }
-        if self.nr51 & 0x20 != 0 { left += ch2_sample; }
-        if self.nr51 & 0x40 != 0 { left += ch3_sample; }
-        if self.nr51 & 0x80 != 0 { left += ch4_sample; }
+        if self.nr51 & 0x10 != 0 { left += ch1; }
+        if self.nr51 & 0x20 != 0 { left += ch2; }
+        if self.nr51 & 0x40 != 0 { left += ch3; }
+        if self.nr51 & 0x80 != 0 { left += ch4; }
 
-        if self.nr51 & 0x01 != 0 { right += ch1_sample; }
-        if self.nr51 & 0x02 != 0 { right += ch2_sample; }
-        if self.nr51 & 0x04 != 0 { right += ch3_sample; }
-        if self.nr51 & 0x08 != 0 { right += ch4_sample; }
+        if self.nr51 & 0x01 != 0 { right += ch1; }
+        if self.nr51 & 0x02 != 0 { right += ch2; }
+        if self.nr51 & 0x04 != 0 { right += ch3; }
+        if self.nr51 & 0x08 != 0 { right += ch4; }
 
-        // Apply NR50 master volume (0-7, +1 for hardware scaling)
+        // Apply NR50 master volume (0-7, hardware adds 1 → range 1-8)
         let left_vol = ((self.nr50 >> 4) & 0x07) as f32 + 1.0;
         let right_vol = (self.nr50 & 0x07) as f32 + 1.0;
 
         left *= left_vol;
         right *= right_vol;
 
-        // Normalize: max possible is 15 (sample) * 4 (channels) * 8 (volume) = 480
-        // Scale to [-1.0, 1.0] range, centered around 0
-        // DAC output: digital 0-15 maps to analog -1.0 to +1.0
-        // So we first convert 0-15 to -7.5..+7.5 conceptually, but since we already
-        // have the raw 0-15 values, we normalize by the maximum and center:
-        // max = 15 * 4 * 8 = 480
-        // We divide by 480 to get 0..1, then remap to -1..1
-        let norm = 1.0 / 480.0;
-        left = left * norm * 2.0 - 1.0;
-        right = right * norm * 2.0 - 1.0;
+        // Normalize: max = 1.0 (centered DAC) * 4 (channels) * 8 (volume) = 32
+        left /= 32.0;
+        right /= 32.0;
 
-        // Clamp
-        left = if left > 1.0 { 1.0 } else if left < -1.0 { -1.0 } else { left };
-        right = if right > 1.0 { 1.0 } else if right < -1.0 { -1.0 } else { right };
+        // High-pass filter removes DC offset (emulates hardware capacitor coupling)
+        left = self.hpf_left.process(left);
+        right = self.hpf_right.process(right);
 
-        (left, right)
+        (left.clamp(-1.0, 1.0), right.clamp(-1.0, 1.0))
     }
 
     /// Drain and return all accumulated audio samples.

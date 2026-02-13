@@ -1420,8 +1420,8 @@ impl Cpu {
                 }
             }
 
-            // [D3] - Undefined
-            0xD3 => panic!("Undefined opcode: 0xD3"),
+            // [D3] - Undefined (behaves as NOP on real hardware)
+            0xD3 => 4,
 
             // CALL NC,a16
             0xD4 => {
@@ -1485,7 +1485,7 @@ impl Cpu {
             }
 
             // [DB] - Undefined
-            0xDB => panic!("Undefined opcode: 0xDB"),
+            0xDB => 4,
 
             // CALL C,a16
             0xDC => {
@@ -1500,7 +1500,7 @@ impl Cpu {
             }
 
             // [DD] - Undefined
-            0xDD => panic!("Undefined opcode: 0xDD"),
+            0xDD => 4,
 
             // SBC A,d8
             0xDE => {
@@ -1541,10 +1541,10 @@ impl Cpu {
             }
 
             // [E3] - Undefined
-            0xE3 => panic!("Undefined opcode: 0xE3"),
+            0xE3 => 4,
 
             // [E4] - Undefined
-            0xE4 => panic!("Undefined opcode: 0xE4"),
+            0xE4 => 4,
 
             // PUSH HL
             0xE5 => {
@@ -1588,13 +1588,13 @@ impl Cpu {
             }
 
             // [EB] - Undefined
-            0xEB => panic!("Undefined opcode: 0xEB"),
+            0xEB => 4,
 
             // [EC] - Undefined
-            0xEC => panic!("Undefined opcode: 0xEC"),
+            0xEC => 4,
 
             // [ED] - Undefined
-            0xED => panic!("Undefined opcode: 0xED"),
+            0xED => 4,
 
             // XOR d8
             0xEE => {
@@ -1637,11 +1637,12 @@ impl Cpu {
             // DI
             0xF3 => {
                 bus.interrupts.ime = false;
+                bus.interrupts.ei_pending = false; // Cancel any pending EI delay
                 4
             }
 
             // [F4] - Undefined
-            0xF4 => panic!("Undefined opcode: 0xF4"),
+            0xF4 => 4,
 
             // PUSH AF
             0xF5 => {
@@ -1690,12 +1691,11 @@ impl Cpu {
                 4
             }
 
-            // [FC] - Undefined (not in the standard list, but FC is valid on some docs)
-            // Actually 0xFC is undefined on DMG
-            0xFC => panic!("Undefined opcode: 0xFC"),
+            // [FC] - Undefined
+            0xFC => 4,
 
             // [FD] - Undefined
-            0xFD => panic!("Undefined opcode: 0xFD"),
+            0xFD => 4,
 
             // CP d8
             0xFE => {

@@ -211,7 +211,7 @@ impl Bus {
         let transfers = self.dma.tick(cycles);
         for (src_addr, oam_offset) in transfers {
             let value = self.dma_read(src_addr);
-            self.ppu.write_oam(0xFE00 + oam_offset as u16, value);
+            self.ppu.dma_write_oam(oam_offset, value);
         }
     }
 

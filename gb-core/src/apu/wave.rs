@@ -10,7 +10,7 @@
 
 pub struct WaveChannel {
     pub enabled: bool,
-    dac_enabled: bool,
+    pub(crate) dac_enabled: bool,
     length_timer: u16,
     length_enabled: bool,
     volume_code: u8,

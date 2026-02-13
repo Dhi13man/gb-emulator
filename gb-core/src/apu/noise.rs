@@ -12,7 +12,7 @@ const DIVISOR_TABLE: [u32; 8] = [8, 16, 32, 48, 64, 80, 96, 112];
 
 pub struct NoiseChannel {
     pub enabled: bool,
-    dac_enabled: bool,
+    pub(crate) dac_enabled: bool,
 
     // Length
     length_timer: u8,
