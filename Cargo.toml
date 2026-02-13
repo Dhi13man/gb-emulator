@@ -1,0 +1,3 @@
+[workspace]
+members = ["gb-core", "gb-frontend"]
+resolver = "2"
