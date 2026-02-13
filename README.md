@@ -45,6 +45,8 @@ gb-emulator/
 
 The core is `no_std` compatible (uses `extern crate alloc`) so it can be embedded in WASM, embedded targets, or any other Rust environment. The frontend is a thin shell that handles windowing, rendering, and audio I/O.
 
+For comprehensive architectural documentation including C4 diagrams, state machines, data transformation flows, and ADRs, see [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md).
+
 ## Getting Started
 
 ### Prerequisites
